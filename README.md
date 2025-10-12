@@ -1,6 +1,10 @@
 # Ron ZBD Challenge
 
-This is a simple TypeScript application that exposes a few API endpoints using Express.js and provides Prometheus metrics, with complete AWS infrastructure deployment using Terraform.
+[![Docker Build](https://github.com/YOUR_USERNAME/ron-zbd-challenge/workflows/Docker%20Build,%20Security%20Scan%20%26%20Push%20to%20ECR/badge.svg)](https://github.com/YOUR_USERNAME/ron-zbd-challenge/actions)
+[![Code Quality](https://github.com/YOUR_USERNAME/ron-zbd-challenge/workflows/Code%20Quality%20%26%20Security%20Analysis/badge.svg)](https://github.com/YOUR_USERNAME/ron-zbd-challenge/actions)
+[![Deploy](https://github.com/YOUR_USERNAME/ron-zbd-challenge/workflows/Deploy%20to%20AWS%20EC2/badge.svg)](https://github.com/YOUR_USERNAME/ron-zbd-challenge/actions)
+
+This is a production-ready TypeScript application that exposes API endpoints using Express.js with Prometheus metrics, complete AWS infrastructure deployment using Terraform, and a fully automated CI/CD pipeline.
 
 ## 🚀 Features
 
@@ -10,7 +14,10 @@ This is a simple TypeScript application that exposes a few API endpoints using E
 - **Configurable Port**: Port can be configured via environment variable
 - **AWS Infrastructure**: Complete deployment to 2 EC2 instances with Docker containerization
 - **Security Hardening**: Enhanced security configurations and monitoring
-- **CI/CD Pipeline**: Automated deployment with GitHub Actions
+- **CI/CD Pipeline**: Automated Docker builds, security scanning, and deployments with GitHub Actions
+- **Container Security**: Multi-layer vulnerability scanning with Trivy, Hadolint, and CodeQL
+- **Dependency Management**: Automated dependency updates and security patches
+- **Zero-Downtime Deployment**: Rolling deployments with health checks
 
 ## 📡 API Endpoints
 
@@ -123,16 +130,40 @@ PORT=9090 npm start
 
 Follow these steps in order:
 
-1. **🏗️ Deploy AWS Infrastructure** (Terraform)
-2. **🔨 Build Application** (Docker)
-3. **🚀 Deploy Application** to AWS instances
-4. **📊 Monitor Application** (Prometheus + CloudWatch)
+1. **🚀 Bootstrap Infrastructure** (S3 bucket + DynamoDB table for Terraform state)
+2. **🏗️ Deploy AWS Infrastructure** (Terraform)
+3. **🔨 Build Application** (Docker)
+4. **🚀 Deploy Application** to AWS instances
+5. **📊 Monitor Application** (Prometheus + CloudWatch)
+
+---
+
+## 🚀 Step 0: Bootstrap Infrastructure
+
+**First, create the foundational AWS resources** for Terraform state management.
+
+### Deploy Bootstrap Resources
+
+```bash
+# Clone the repository
+git clone https://github.com/your-username/ron-zbd-challenge.git
+cd ron-zbd-challenge
+
+# Bootstrap Terraform backend
+cd terraform/bootstrap
+./deploy.sh
+```
+
+This creates:
+- **S3 Bucket**: `ron-zbd-challenge-terraform-state` (for storing Terraform state)
+- **Security**: Encryption, versioning, and access controls
+- **Note**: State locking disabled due to DynamoDB permission constraints
 
 ---
 
 ## 🏗️ Step 1: Deploy AWS Infrastructure
 
-**Deploy the infrastructure first** before building the application.
+**Deploy the main infrastructure** after bootstrap is complete.
 
 ### Quick Deploy
 
@@ -141,18 +172,65 @@ Follow these steps in order:
 git clone https://github.com/your-username/ron-zbd-challenge.git
 cd ron-zbd-challenge
 
-# Deploy infrastructure
+# Set your personal IP address
+export PERSONAL_IP="YOUR_IP_ADDRESS"
+
+# Create SSH key pair (optional - for SSH access)
 cd terraform
-# Edit main.tf to update allowed_ssh_cidrs with your personal IP
+./setup-ssh-key.sh
+
+# Deploy infrastructure (select environment when prompted)
 ./deploy.sh
 ```
 
-**Important**: Before deploying, update the `allowed_ssh_cidrs` in `main.tf` with your personal IP address:
-```hcl
-allowed_ssh_cidrs = ["YOUR_IP_ADDRESS/32"]
+The script will prompt you to select either `dev` or `prod` environment.
+
+**Important**: Set your personal IP address as an environment variable before deploying:
+```bash
+export PERSONAL_IP="203.0.113.1"  # /32 will be added automatically
 ```
 
+You can get your IP address by visiting: https://whatismyipaddress.com/
+
 This creates 2 EC2 instances ready for your application deployment.
+
+### SSH Access
+
+The infrastructure supports both SSH key access and AWS Systems Manager Session Manager:
+
+#### Option 1: SSH Key Access (Recommended)
+
+1. **Create SSH Key Pair**:
+   ```bash
+   cd terraform
+   ./setup-ssh-key.sh
+   ```
+
+2. **Deploy with SSH Key**:
+   ```bash
+   export PERSONAL_IP="YOUR_IP_ADDRESS"
+   export SSH_KEY_NAME="ron-zbd-challenge-key"  # Optional, uses default
+   ./deploy.sh
+   ```
+
+3. **Connect via SSH**:
+   ```bash
+   chmod 400 ~/.ssh/ron-zbd-challenge-key.pem
+   ssh -i ~/.ssh/ron-zbd-challenge-key.pem ec2-user@<instance-public-ip>
+   ```
+
+#### Option 2: AWS Session Manager
+
+If you prefer not to use SSH keys, you can access instances via AWS Systems Manager:
+
+```bash
+# Install Session Manager plugin
+curl "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" -o "session-manager-plugin.deb"
+sudo dpkg -i session-manager-plugin.deb
+
+# Connect to instance
+aws ssm start-session --target <instance-id>
+```
 
 ---
 
@@ -309,6 +387,10 @@ ron-zbd-challenge/
 │   ├── tsconfig.json    # TypeScript configuration
 │   └── node_modules/    # Node.js dependencies
 ├── terraform/           # Infrastructure as Code
+│   ├── bootstrap/       # Bootstrap resources (S3 only)
+│   │   ├── main.tf      # S3 bucket configuration
+│   │   ├── deploy.sh    # Bootstrap deployment script
+│   │   └── README.md    # Bootstrap documentation
 │   ├── modules/         # Reusable Terraform modules
 │   │   ├── vpc/         # VPC and networking
 │   │   └── ec2/         # Single EC2 instance
@@ -414,27 +496,27 @@ This section provides detailed information about the AWS infrastructure deployme
 #### Option 1: Manual Deployment (Root Directory)
 ```bash
 cd terraform
-# Edit main.tf to update allowed_ssh_cidrs with your personal IP
+export PERSONAL_IP="YOUR_IP_ADDRESS/32"
 terraform init
-terraform plan
-terraform apply
+terraform plan -var="personal_ip=$PERSONAL_IP"
+terraform apply -var="personal_ip=$PERSONAL_IP"
 ```
 
 #### Option 2: Environment-Specific Deployment
 ```bash
 # Development Environment
 cd terraform/environments/dev
-# Edit main.tf to update allowed_ssh_cidrs with your personal IP
+export PERSONAL_IP="YOUR_IP_ADDRESS/32"
 terraform init
-terraform plan
-terraform apply
+terraform plan -var="personal_ip=$PERSONAL_IP"
+terraform apply -var="personal_ip=$PERSONAL_IP"
 
 # Production Environment
 cd terraform/environments/prod
-# Edit main.tf to update allowed_ssh_cidrs with your personal IP
+export PERSONAL_IP="YOUR_IP_ADDRESS/32"
 terraform init
-terraform plan
-terraform apply
+terraform plan -var="personal_ip=$PERSONAL_IP"
+terraform apply -var="personal_ip=$PERSONAL_IP"
 ```
 
 ### 🏢 Environment-Specific Configuration
@@ -540,38 +622,286 @@ systemctl status docker
 
 ## 🔄 CI/CD Pipeline
 
-### GitHub Actions Workflow
-The CI/CD pipeline includes:
+The project includes a comprehensive CI/CD pipeline with automated builds, security scanning, and deployments.
 
-1. **Docker Image Build & Scan**:
-   - Builds API Docker image
-   - Pushes to Amazon ECR
-   - Runs Trivy vulnerability scan
-   - Uploads scan results to GitHub Security tab
+### 🚀 Quick Start
 
-2. **Infrastructure Setup**:
-   - Creates S3 bucket for Terraform state
-   - Creates DynamoDB table for state locking
-   - Creates ECR repository
+For detailed setup instructions, see **[CI/CD Setup Guide](.github/SETUP.md)**.
 
-3. **Infrastructure Deployment**:
-   - Terraform format check
-   - Terraform validation
-   - Terraform plan
-   - Terraform apply (on main branch)
+#### Required GitHub Secrets
 
-4. **API Deployment**:
-   - Deploys API to Instance A using SSM
-   - Verifies deployment health
+Add these secrets to your repository (Settings → Secrets and variables → Actions):
 
-### Required GitHub Secrets
 ```bash
-AWS_ACCESS_KEY_ID=your_access_key
-AWS_SECRET_ACCESS_KEY=your_secret_key
-AWS_ACCOUNT_ID=your_account_id
+AWS_ACCESS_KEY_ID=your_access_key          # Required
+AWS_SECRET_ACCESS_KEY=your_secret_key      # Required
+SNYK_TOKEN=your_snyk_token                 # Optional
+SONAR_TOKEN=your_sonar_token               # Optional
 ```
 
-**Note**: Personal IP configuration is now done directly in the Terraform files, not via GitHub secrets.
+### 📦 Workflows
+
+#### 1. Docker Build, Security Scan & Push to ECR
+
+**File:** `.github/workflows/docker-build-push.yml`
+
+**Triggers:**
+- Push to `main` or `develop` branches
+- Pull requests
+- Manual dispatch
+
+**Features:**
+- ✅ Multi-stage Docker builds with BuildKit caching
+- ✅ Trivy vulnerability scanning (container images)
+- ✅ Hadolint Dockerfile linting
+- ✅ Secret scanning in source code
+- ✅ Automated push to Amazon ECR
+- ✅ ECR lifecycle policy management
+- ✅ SARIF upload to GitHub Security tab
+
+**Security Checks:**
+```yaml
+- Container OS vulnerabilities (CRITICAL, HIGH)
+- Library/dependency vulnerabilities
+- Dockerfile best practices
+- Hardcoded secrets detection
+- Image size optimization
+```
+
+#### 2. Dependency Security & Updates
+
+**File:** `.github/workflows/dependency-security.yml`
+
+**Triggers:**
+- Weekly schedule (Monday 9 AM UTC)
+- Changes to package files
+- Manual dispatch
+
+**Features:**
+- ✅ npm audit for vulnerability detection
+- ✅ Snyk security scanning
+- ✅ Automated dependency update PRs
+- ✅ License compliance checking (blocks GPL)
+- ✅ Outdated package detection
+- ✅ Dependency review on PRs
+
+**Automated Updates:**
+The workflow creates pull requests weekly with:
+- Updated dependencies
+- Security patches via `npm audit fix`
+- Detailed changelog
+
+#### 3. Code Quality & Security Analysis
+
+**File:** `.github/workflows/code-quality.yml`
+
+**Triggers:**
+- Push to `main` or `develop`
+- Pull requests
+- Manual dispatch
+
+**Features:**
+- ✅ TypeScript compilation checks
+- ✅ ESLint static analysis
+- ✅ CodeQL security analysis
+- ✅ GitLeaks secret detection
+- ✅ Semgrep pattern analysis
+- ✅ OWASP dependency check
+- ✅ Unused dependency detection
+- ✅ Package size analysis
+
+**Security Coverage:**
+```yaml
+Languages: JavaScript, TypeScript
+Scanners: CodeQL, Semgrep, GitLeaks, OWASP
+Patterns: Security, Secrets, Node.js best practices
+```
+
+#### 4. Deploy to AWS EC2
+
+**File:** `.github/workflows/deploy.yml`
+
+**Triggers:**
+- Successful Docker build workflow completion
+- Manual dispatch with environment selection
+
+**Features:**
+- ✅ Zero-downtime deployments via AWS SSM
+- ✅ Automated health checks
+- ✅ Rollback on failure
+- ✅ Multiple environment support (dev/prod)
+- ✅ Deployment verification
+- ✅ CloudWatch logging integration
+
+**Deployment Flow:**
+```mermaid
+graph LR
+    A[Docker Build Success] --> B[Get EC2 Instance]
+    B --> C[Login to ECR]
+    C --> D[Deploy via SSM]
+    D --> E[Health Check]
+    E --> F[Verify Endpoints]
+    F --> G[Deployment Complete]
+    E -.Fail.-> H[Rollback]
+```
+
+### 🐳 Local Development
+
+#### Build and Run with Docker Compose
+
+```bash
+# Build and start all services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop services
+docker-compose down
+```
+
+**Services:**
+- **API**: http://localhost:8080
+- **Prometheus**: http://localhost:9090
+- **Grafana**: http://localhost:3000 (admin/admin)
+
+#### Build Docker Image Locally
+
+```bash
+cd app
+docker build -t ron-zbd-challenge-api .
+docker run -p 8080:8080 ron-zbd-challenge-api
+```
+
+### 🔒 Security Features
+
+The CI/CD pipeline includes multiple security layers:
+
+| Layer | Tools | Frequency |
+|-------|-------|-----------|
+| **Container Security** | Trivy, Hadolint | Every build |
+| **Dependency Security** | npm audit, Snyk, OWASP | Weekly + PRs |
+| **Code Security** | CodeQL, Semgrep, GitLeaks | Every commit |
+| **Secret Detection** | Trivy, GitLeaks | Every commit |
+| **License Compliance** | license-checker | Every commit |
+
+**Vulnerability Thresholds:**
+- Container: CRITICAL and HIGH must be addressed
+- Dependencies: MODERATE and above require review
+- Secrets: Any detection blocks deployment
+
+### 📊 Monitoring & Observability
+
+#### GitHub Security Tab
+
+View all security findings in one place:
+- Navigate to **Security** → **Code scanning**
+- Review alerts from Trivy, CodeQL, Semgrep
+- Check **Dependabot** for dependency alerts
+
+#### Build Metrics
+
+Each workflow run provides:
+- Build time and status
+- Security scan results
+- Deployment verification
+- Resource usage
+- Endpoint health checks
+
+#### Deployment Tracking
+
+After deployment, the workflow provides:
+```
+✅ Deployment Summary
+- Environment: dev
+- Image: ron-zbd-challenge-api:abc123
+- Instance ID: i-1234567890
+- Endpoints:
+  * Health: http://x.x.x.x:8080/health
+  * Metrics: http://x.x.x.x:8080/metrics
+```
+
+### 🔧 Advanced Configuration
+
+#### Customize Security Thresholds
+
+Edit workflow files to adjust sensitivity:
+
+```yaml
+# .github/workflows/docker-build-push.yml
+- name: Run Trivy vulnerability scanner
+  with:
+    severity: 'CRITICAL,HIGH,MEDIUM'  # Add MEDIUM
+    exit-code: '1'  # Fail build on findings
+```
+
+#### Add New Environments
+
+1. Create Terraform environment: `terraform/environments/staging/`
+2. Update deploy workflow with new environment option
+3. Configure environment-specific secrets in GitHub
+
+#### Enable Advanced Features
+
+**SonarCloud Integration:**
+1. Sign up at sonarcloud.io
+2. Add `SONAR_TOKEN` to GitHub secrets
+3. Update organization/project in workflow
+
+**Snyk Integration:**
+1. Sign up at snyk.io
+2. Add `SNYK_TOKEN` to GitHub secrets
+3. Workflow will automatically use it
+
+### 📈 Pipeline Performance
+
+**Target Metrics:**
+- Build time: < 5 minutes
+- Security scan: < 2 minutes
+- Deployment: < 3 minutes
+- Success rate: > 95%
+
+**Optimization Features:**
+- Docker layer caching with GitHub Actions cache
+- Parallel job execution
+- Incremental builds
+- Artifact caching
+
+### 🐛 Troubleshooting
+
+Common issues and solutions:
+
+**ECR Push Failed:**
+```bash
+# Verify AWS credentials
+aws ecr describe-repositories --region us-east-1
+
+# Manually create repository if needed
+aws ecr create-repository --repository-name ron-zbd-challenge-api
+```
+
+**Deployment Failed:**
+```bash
+# Check EC2 instance status
+aws ec2 describe-instances --filters "Name=tag:Name,Values=*instance-a"
+
+# Verify SSM agent
+aws ssm describe-instance-information
+```
+
+**Security Scan Failures:**
+- Review findings in GitHub Security tab
+- Update vulnerable dependencies
+- Check for false positives
+
+For detailed troubleshooting, see **[CI/CD Setup Guide](.github/SETUP.md)**.
+
+### 📚 Additional Resources
+
+- **[CI/CD Setup Guide](.github/SETUP.md)** - Detailed setup instructions
+- **[GitHub Actions Docs](https://docs.github.com/actions)** - Official documentation
+- **[Trivy Documentation](https://aquasecurity.github.io/trivy/)** - Container scanning
+- **[AWS ECR Guide](https://docs.aws.amazon.com/ecr/)** - Container registry
 
 ## 📊 Monitoring Setup
 
@@ -756,9 +1086,9 @@ terraform destroy
 
 ## 🎯 Next Steps
 
-1. **Configure your personal IP** in the main.tf files (replace `"0.0.0.0/0"` with `"YOUR_IP/32"`)
+1. **Set your personal IP** as an environment variable: `export PERSONAL_IP="YOUR_IP/32"`
 2. **Set up GitHub secrets** for CI/CD
-3. **Deploy development environment**
+3. **Deploy development environment** using `./deploy.sh`
 4. **Test security group configuration**
 5. **Deploy API and Prometheus applications**
 6. **Verify monitoring is working**

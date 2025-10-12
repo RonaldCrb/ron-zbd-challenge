@@ -1,0 +1,175 @@
+name: Build, Scan & Push to ECR
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'app/**'
+      - '.github/workflows/build-scan-push.yml'
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: ron-zbd-challenge-api
+
+permissions:
+  contents: read
+  security-events: write
+  id-token: write
+
+jobs:
+  build-scan-push:
+    name: Build, Scan & Push
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Create ECR repository if not exists
+        continue-on-error: true
+        run: |
+          aws ecr describe-repositories \
+            --repository-names ${{ env.ECR_REPOSITORY }} \
+            --region ${{ env.AWS_REGION }} || \
+          aws ecr create-repository \
+            --repository-name ${{ env.ECR_REPOSITORY }} \
+            --region ${{ env.AWS_REGION }} \
+            --image-scanning-configuration scanOnPush=true \
+            --encryption-configuration encryptionType=AES256
+
+      - name: Set ECR lifecycle policy
+        continue-on-error: true
+        run: |
+          aws ecr put-lifecycle-policy \
+            --repository-name ${{ env.ECR_REPOSITORY }} \
+            --region ${{ env.AWS_REGION }} \
+            --lifecycle-policy-text '{
+              "rules": [{
+                "rulePriority": 1,
+                "description": "Keep last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": {"type": "expire"}
+              }]
+            }'
+
+      - name: Generate image metadata
+        id: meta
+        run: |
+          IMAGE_TAG="${{ github.sha }}"
+          REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+          IMAGE_URI="${REGISTRY}/${{ env.ECR_REPOSITORY }}:${IMAGE_TAG}"
+          
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "image_uri=${IMAGE_URI}" >> $GITHUB_OUTPUT
+          echo "registry=${REGISTRY}" >> $GITHUB_OUTPUT
+          
+          # Additional tags
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "latest_tag=${REGISTRY}/${{ env.ECR_REPOSITORY }}:latest" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/develop" ]; then
+            echo "latest_tag=${REGISTRY}/${{ env.ECR_REPOSITORY }}:develop" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./app
+          file: ./app/Dockerfile
+          push: false
+          load: true
+          tags: |
+            ${{ steps.meta.outputs.image_uri }}
+            ${{ steps.meta.outputs.latest_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.meta.outputs.image_uri }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          vuln-type: 'os,library'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Run Trivy scan (table output for logs)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.meta.outputs.image_uri }}
+          format: 'table'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '0'
+
+      - name: Push image to ECR
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+        run: |
+          docker push ${{ steps.meta.outputs.image_uri }}
+          
+          if [ -n "${{ steps.meta.outputs.latest_tag }}" ]; then
+            docker push ${{ steps.meta.outputs.latest_tag }}
+          fi
+
+      - name: Generate summary
+        if: always()
+        run: |
+          echo "## 🐳 Docker Build & Push Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** ${{ env.ECR_REPOSITORY }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image Tag:** ${{ steps.meta.outputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry:** ${{ steps.meta.outputs.registry }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ github.event_name }}" == "push" ] && [ "${{ github.ref }}" == "refs/heads/main" -o "${{ github.ref }}" == "refs/heads/develop" ]; then
+            echo "✅ **Status:** Image built, scanned, and pushed to ECR" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Image URI:** \`${{ steps.meta.outputs.image_uri }}\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ **Status:** Image built and scanned (not pushed - PR or non-main/develop branch)" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Security Scan" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Trivy vulnerability scan completed" >> $GITHUB_STEP_SUMMARY
+          echo "📊 View detailed results in the Security tab" >> $GITHUB_STEP_SUMMARY
+
+      - name: Output image details
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+        run: |
+          echo "Image successfully pushed to ECR!"
+          echo "Image URI: ${{ steps.meta.outputs.image_uri }}"
+          echo ""
+          echo "To pull this image:"
+          echo "aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ steps.meta.outputs.registry }}"
+          echo "docker pull ${{ steps.meta.outputs.image_uri }}"

@@ -1,6 +1,6 @@
 # Security Group
 resource "aws_security_group" "ec2" {
-  name_prefix = "${var.project_name}-ec2-"
+  name_prefix = "${var.project_name}-${var.instance_name}-sg-"
   vpc_id      = var.vpc_id
 
   # SSH access
@@ -63,7 +63,7 @@ resource "aws_security_group" "ec2" {
   }
 
   tags = {
-    Name        = "${var.project_name}-ec2-sg"
+    Name        = "${var.project_name}-${var.instance_name}-sg"
     Environment = var.environment
     Project     = var.project_name
   }
@@ -71,11 +71,11 @@ resource "aws_security_group" "ec2" {
 
 # CloudWatch Log Group
 resource "aws_cloudwatch_log_group" "app_logs" {
-  name              = var.cloudwatch_log_group_name
+  name              = "${var.cloudwatch_log_group_name}-${var.instance_name}"
   retention_in_days = var.log_retention_days
 
   tags = {
-    Name        = "${var.project_name}-logs"
+    Name        = "${var.project_name}-${var.instance_name}-logs"
     Environment = var.environment
     Project     = var.project_name
   }
@@ -83,7 +83,7 @@ resource "aws_cloudwatch_log_group" "app_logs" {
 
 # IAM Role for EC2 instance
 resource "aws_iam_role" "ec2_role" {
-  name = "${var.project_name}-ec2-role"
+  name = "${var.project_name}-${var.instance_name}-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -99,7 +99,7 @@ resource "aws_iam_role" "ec2_role" {
   })
 
   tags = {
-    Name        = "${var.project_name}-ec2-role"
+    Name        = "${var.project_name}-${var.instance_name}-role"
     Environment = var.environment
     Project     = var.project_name
   }
@@ -107,7 +107,7 @@ resource "aws_iam_role" "ec2_role" {
 
 # IAM Policy for CloudWatch Logs
 resource "aws_iam_policy" "cloudwatch_logs" {
-  name        = "${var.project_name}-cloudwatch-logs"
+  name        = "${var.project_name}-${var.instance_name}-cloudwatch-logs"
   description = "Policy for CloudWatch Logs access"
 
   policy = jsonencode({
@@ -122,7 +122,7 @@ resource "aws_iam_policy" "cloudwatch_logs" {
           "logs:DescribeLogStreams"
         ]
         Resource = [
-          "arn:aws:logs:*:*:log-group:${var.cloudwatch_log_group_name}*"
+          "arn:aws:logs:*:*:log-group:${var.cloudwatch_log_group_name}-${var.instance_name}*"
         ]
       }
     ]
@@ -143,11 +143,11 @@ resource "aws_iam_role_policy_attachment" "ssm_managed_instance_core" {
 
 # Instance Profile
 resource "aws_iam_instance_profile" "ec2_profile" {
-  name = "${var.project_name}-ec2-profile"
+  name = "${var.project_name}-${var.instance_name}-profile"
   role = aws_iam_role.ec2_role.name
 
   tags = {
-    Name        = "${var.project_name}-ec2-profile"
+    Name        = "${var.project_name}-${var.instance_name}-profile"
     Environment = var.environment
     Project     = var.project_name
   }
@@ -158,6 +158,7 @@ resource "aws_instance" "main" {
   ami                    = var.ami_id
   instance_type          = var.instance_type
   subnet_id              = var.subnet_id
+  key_name               = var.key_name
   vpc_security_group_ids = [aws_security_group.ec2.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
   user_data              = base64encode(templatefile("${path.module}/user_data.sh", {

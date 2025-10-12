@@ -30,6 +30,14 @@ crash.*.log
 *.tfplan
 *.tfplan.*
 
+# Bootstrap Terraform files
+terraform/bootstrap/.terraform/
+terraform/bootstrap/.terraform.lock.hcl
+terraform/bootstrap/*.tfstate
+terraform/bootstrap/*.tfstate.*
+terraform/bootstrap/*.tfplan
+terraform/bootstrap/*.tfplan.*
+
 # OS generated files
 .DS_Store
 .DS_Store?

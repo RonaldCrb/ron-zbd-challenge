@@ -20,14 +20,6 @@ provider "aws" {
   region = "us-east-1"
 }
 
-# Locals
-locals {
-  project_name              = "ron-zbd-challenge"
-  environment               = "prod"
-  allowed_ssh_cidrs         = ["0.0.0.0/0"]  # WARNING: Replace with your IP!
-  cloudwatch_log_group_name = "/aws/ec2/ron-zbd-challenge-prod"
-}
-
 # Data sources
 data "aws_availability_zones" "available" {
   state = "available"
@@ -47,6 +39,28 @@ data "aws_ami" "amazon_linux_2023" {
     values = ["hvm"]
   }
 }
+
+# Variables
+variable "personal_ip" {
+  description = "Your personal IP address for SSH access (e.g., 1.2.3.4/32)"
+  type        = string
+  default     = ""
+}
+
+variable "ssh_key_name" {
+  description = "Name of the EC2 Key Pair to use for SSH access"
+  type        = string
+  default     = "ron-zbd-challenge-key"
+}
+
+# Locals
+locals {
+  project_name              = "ron-zbd-challenge"
+  environment               = "prod"
+  allowed_ssh_cidrs         = var.personal_ip != "" ? [var.personal_ip] : []
+  cloudwatch_log_group_name = "/aws/ec2/ron-zbd-challenge-prod"
+}
+
 
 # VPC Module
 module "vpc" {
@@ -70,7 +84,8 @@ module "instance_a" {
   ami_id                    = data.aws_ami.amazon_linux_2023.id
   instance_name             = "instance-a"
   instance_type             = "t3.small"      # Override default t3.micro for prod
-  volume_size               = 50              # Override default 20GB for prod
+  volume_size               = 50              # Override default 30GB for prod
+  key_name                  = var.ssh_key_name
   allowed_ssh_cidrs         = local.allowed_ssh_cidrs
   prometheus_security_group_id = module.instance_b.security_group_id
   cloudwatch_log_group_name = local.cloudwatch_log_group_name
@@ -90,7 +105,8 @@ module "instance_b" {
   ami_id                    = data.aws_ami.amazon_linux_2023.id
   instance_name             = "instance-b"
   instance_type             = "t3.small"      # Override default t3.micro for prod
-  volume_size               = 50              # Override default 20GB for prod
+  volume_size               = 50              # Override default 30GB for prod
+  key_name                  = var.ssh_key_name
   allowed_ssh_cidrs         = local.allowed_ssh_cidrs
   cloudwatch_log_group_name = local.cloudwatch_log_group_name
   log_retention_days        = 30              # Override default 14 days for prod

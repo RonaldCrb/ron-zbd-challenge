@@ -43,7 +43,7 @@ variable "volume_type" {
 variable "volume_size" {
   description = "Size of the root volume in GB"
   type        = number
-  default     = 20
+  default     = 30
 }
 
 variable "delete_on_termination" {
@@ -96,4 +96,10 @@ variable "log_retention_days" {
   description = "Number of days to retain CloudWatch logs"
   type        = number
   default     = 14
+}
+
+variable "key_name" {
+  description = "Name of the EC2 Key Pair to use for SSH access"
+  type        = string
+  default     = null
 }

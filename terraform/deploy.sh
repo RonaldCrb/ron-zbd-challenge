@@ -18,31 +18,85 @@ if ! aws sts get-caller-identity &> /dev/null; then
     exit 1
 fi
 
-# Check if personal IP needs to be configured
-echo "⚠️  IMPORTANT: Please update the allowed_ssh_cidrs in main.tf with your personal IP address!"
-echo "   Edit the allowed_ssh_cidrs line to use your IP instead of '0.0.0.0/0'"
-echo "   Example: allowed_ssh_cidrs = [\"YOUR_IP_HERE/32\"]"
+# Check if personal IP is provided via environment variable
+if [[ -z "${PERSONAL_IP}" ]]; then
+    echo "⚠️  PERSONAL_IP environment variable is not set!"
+    echo "   Please set your personal IP address as an environment variable:"
+    echo "   export PERSONAL_IP=\"YOUR_IP_ADDRESS\""
+    echo ""
+    echo "   You can get your IP address by visiting: https://whatismyipaddress.com/"
+    echo "   Example: export PERSONAL_IP=\"203.0.113.1\""
+    echo ""
+    read -p "Enter your IP address (e.g., 203.0.113.1): " ip_input
+    if [[ -z "$ip_input" ]]; then
+        echo "❌ No IP address provided. Exiting."
+        exit 1
+    fi
+    export PERSONAL_IP="$ip_input"
+fi
+
+# Ensure IP has /32 CIDR notation
+if [[ "$PERSONAL_IP" != *"/"* ]]; then
+    PERSONAL_IP="${PERSONAL_IP}/32"
+fi
+
+echo "✅ Using personal IP: $PERSONAL_IP"
+
+# Check if SSH key name is provided via environment variable
+if [[ -z "${SSH_KEY_NAME}" ]]; then
+    SSH_KEY_NAME="ron-zbd-challenge-key"
+    echo "⚠️  SSH_KEY_NAME environment variable is not set!"
+    echo "   Using default key name: $SSH_KEY_NAME"
+    echo "   To use a different key, set: export SSH_KEY_NAME=\"your-key-name\""
+else
+    echo "✅ Using SSH key: $SSH_KEY_NAME"
+fi
+
+# Select environment
 echo ""
-read -p "Have you updated the SSH CIDR blocks in main.tf? (y/N): " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "❌ Please update main.tf with your personal IP address first."
+echo "🌍 Select deployment environment:"
+echo "   1) dev"
+echo "   2) prod"
+echo ""
+read -p "Enter your choice (1 or 2): " env_choice
+
+case $env_choice in
+    1)
+        ENVIRONMENT="dev"
+        ;;
+    2)
+        ENVIRONMENT="prod"
+        ;;
+    *)
+        echo "❌ Invalid choice. Please select 1 for dev or 2 for prod."
+        exit 1
+        ;;
+esac
+
+echo "✅ Selected environment: $ENVIRONMENT"
+echo "✅ Prerequisites check passed"
+
+# Change to environment directory
+ENV_DIR="environments/$ENVIRONMENT"
+if [[ ! -d "$ENV_DIR" ]]; then
+    echo "❌ Environment directory '$ENV_DIR' not found!"
     exit 1
 fi
 
-echo "✅ Prerequisites check passed"
+echo "📁 Deploying from: $ENV_DIR"
+cd "$ENV_DIR"
 
 # Initialize Terraform
 echo "🔧 Initializing Terraform..."
 terraform init
 
 # Plan the deployment
-echo "📋 Planning deployment..."
-terraform plan
+echo "📋 Planning deployment for $ENVIRONMENT environment..."
+terraform plan -var="personal_ip=$PERSONAL_IP" -var="ssh_key_name=$SSH_KEY_NAME"
 
 # Ask for confirmation
 echo ""
-read -p "🤔 Do you want to proceed with the deployment? (y/N): " -n 1 -r
+read -p "🤔 Do you want to proceed with the $ENVIRONMENT deployment? (y/N): " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     echo "❌ Deployment cancelled."
@@ -50,12 +104,12 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
 fi
 
 # Apply the configuration
-echo "🚀 Deploying infrastructure..."
-terraform apply -auto-approve
+echo "🚀 Deploying $ENVIRONMENT infrastructure..."
+terraform apply -auto-approve -var="personal_ip=$PERSONAL_IP" -var="ssh_key_name=$SSH_KEY_NAME"
 
 # Display outputs
 echo ""
-echo "✅ Deployment completed successfully!"
+echo "✅ $ENVIRONMENT deployment completed successfully!"
 echo ""
 echo "📊 Infrastructure outputs:"
 terraform output
@@ -76,4 +130,4 @@ echo "Log Group: $(terraform output -raw cloudwatch_log_group_name)"
 echo "View logs in AWS CloudWatch console"
 
 echo ""
-echo "🎉 Infrastructure setup complete! The instances are now ready for Docker application deployment."
+echo "🎉 $ENVIRONMENT infrastructure setup complete! The instances are now ready for Docker application deployment."
