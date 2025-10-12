@@ -109,33 +109,193 @@ cd app
 PORT=9090 npm start
 ```
 
-## 🛠️ Installation and Setup
+## 🚀 Quick Start Guide
 
 ### Prerequisites
 
+- **AWS Account** with appropriate permissions
+- **Terraform** installed (v1.0+)
 - **Node.js** (v18 or later recommended)
 - **npm** (comes with Node.js)
+- **Docker** (for containerization)
 
-### Steps
+### Deployment Flow
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/your-username/ron-zbd-challenge.git
-    cd ron-zbd-challenge
-    ```
+Follow these steps in order:
 
-2.  **Install dependencies:**
-    ```bash
-    cd app
-    npm install
-    ```
+1. **🏗️ Deploy AWS Infrastructure** (Terraform)
+2. **🔨 Build Application** (Docker)
+3. **🚀 Deploy Application** to AWS instances
+4. **📊 Monitor Application** (Prometheus + CloudWatch)
 
-3.  **Run the application:**
-    ```bash
-    npm start
-    ```
+---
+
+## 🏗️ Step 1: Deploy AWS Infrastructure
+
+**Deploy the infrastructure first** before building the application.
+
+### Quick Deploy
+
+```bash
+# Clone the repository
+git clone https://github.com/your-username/ron-zbd-challenge.git
+cd ron-zbd-challenge
+
+# Deploy infrastructure
+cd terraform
+# Edit main.tf to update allowed_ssh_cidrs with your personal IP
+./deploy.sh
+```
+
+**Important**: Before deploying, update the `allowed_ssh_cidrs` in `main.tf` with your personal IP address:
+```hcl
+allowed_ssh_cidrs = ["YOUR_IP_ADDRESS/32"]
+```
+
+This creates 2 EC2 instances ready for your application deployment.
+
+---
+
+## 🔨 Step 2: Build Application
+
+After infrastructure is deployed, build your application.
+
+### Local Development Setup
+
+```bash
+# Navigate to application directory
+cd app
+
+# Install dependencies
+npm install
+
+# Run locally for testing (optional)
+npm start
+```
 
 The application will be running on `http://127.0.0.1:8080` by default.
+
+---
+
+## 🚀 Step 3: Deploy Application to AWS
+
+After building your application, deploy it to the AWS infrastructure.
+
+### Create Docker Image
+
+```bash
+# Create Dockerfile in app directory
+cd app
+cat > Dockerfile << EOF
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY src/ ./src/
+EXPOSE 8080
+CMD ["npm", "start"]
+EOF
+
+# Build Docker image
+docker build -t ron-zbd-challenge-api .
+```
+
+### Deploy to Instance A (API Server)
+
+```bash
+# SSH to your API instance
+ssh -i your-key.pem ec2-user@<instance-a-ip>
+
+# Navigate to app directory
+cd /opt/app
+
+# Create docker-compose.yml
+cat > docker-compose.yml << EOF
+version: '3.8'
+services:
+  api:
+    image: ron-zbd-challenge-api:latest
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+EOF
+
+# Deploy application
+docker-compose up -d
+
+# Verify deployment
+docker ps
+curl http://localhost:8080/health
+```
+
+### Deploy Prometheus to Instance B
+
+```bash
+# SSH to your Prometheus instance
+ssh -i your-key.pem ec2-user@<instance-b-ip>
+
+# Navigate to app directory
+cd /opt/app
+
+# Create Prometheus configuration
+cat > prometheus.yml << EOF
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'api-server'
+    static_configs:
+      - targets: ['<instance-a-ip>:8080']
+    metrics_path: '/metrics'
+EOF
+
+# Create docker-compose.yml
+cat > docker-compose.yml << EOF
+version: '3.8'
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    restart: unless-stopped
+EOF
+
+# Deploy Prometheus
+docker-compose up -d
+
+# Verify deployment
+docker ps
+curl http://localhost:9090
+```
+
+---
+
+## 📊 Step 4: Monitor Application
+
+Your application is now deployed and ready for monitoring.
+
+### Access Monitoring Dashboards
+
+- **API Health**: `http://<instance-a-ip>:8080/health`
+- **API Metrics**: `http://<instance-a-ip>:8080/metrics`
+- **Prometheus UI**: `http://<instance-b-ip>:9090`
+
+### Test the Complete Setup
+
+```bash
+# Test API endpoints
+curl http://<instance-a-ip>:8080/health
+curl http://<instance-a-ip>:8080/hello
+curl http://<instance-a-ip>:8080/metrics
+
+# Check Prometheus targets
+# Visit http://<instance-b-ip>:9090/targets
+# Should show api-server target as UP
+```
+
+---
 
 ## 🏗️ Project Structure
 
@@ -220,9 +380,11 @@ curl http://127.0.0.1:8080/hello
 curl http://127.0.0.1:8080/metrics
 ```
 
-## ☁️ AWS Infrastructure Deployment
+---
 
-Deploy this application to 2 EC2 instances using Terraform with Docker containerization.
+## ☁️ Detailed AWS Infrastructure Guide
+
+This section provides detailed information about the AWS infrastructure deployment.
 
 ### 🏗️ Architecture Overview
 
@@ -230,34 +392,21 @@ Deploy this application to 2 EC2 instances using Terraform with Docker container
 ┌─────────────────────────────────────────────────────────────┐
 │                    AWS Infrastructure                       │
 ├─────────────────────────────────────────────────────────────┤
-│  VPC (10.0.0.0/16)                                          │
-│  ┌─────────────────┐    ┌─────────────────┐                 │
-│  │   Instance A    │    │   Instance B    │                 │
-│  │  (API Server)   │    │  (Prometheus)   │                 │
-│  │                 │    │                 │                 │
-│  │ • Docker API    │    │ • Prometheus    │                 │
-│  │ • Port 8080     │    │ • Port 9090     │                 │
-│  │ • /metrics      │◄──►│ • Scraping      │                 │
-│  └─────────────────┘    └─────────────────┘                 │
+│  VPC (10.0.0.0/16)                                         │
+│  ┌─────────────────┐    ┌─────────────────┐                │
+│  │   Instance A    │    │   Instance B    │                │
+│  │  (API Server)   │    │  (Prometheus)   │                │
+│  │                 │    │                 │                │
+│  │ • Docker API    │    │ • Prometheus    │                │
+│  │ • Port 8080     │    │ • Port 9090     │                │
+│  │ • /metrics      │◄──►│ • Scraping      │                │
+│  └─────────────────┘    └─────────────────┘                │
 │                                                             │
 │  Security Groups:                                           │
-│  • SSH: Personal IP only                                    │
-│  • API: Source security group for /metrics                  │
-│  • Prometheus: Public access                                │
+│  • SSH: Personal IP only                                   │
+│  • API: Source security group for /metrics                 │
+│  • Prometheus: Public access                               │
 └─────────────────────────────────────────────────────────────┘
-```
-
-### 🚀 Quick Deploy
-
-```bash
-cd terraform
-# Edit main.tf to update allowed_ssh_cidrs with your personal IP
-./deploy.sh
-```
-
-**Important**: Before deploying, update the `allowed_ssh_cidrs` in `main.tf` with your personal IP address:
-```hcl
-allowed_ssh_cidrs = ["YOUR_IP_ADDRESS/32"]
 ```
 
 ### 🔧 Deployment Options
@@ -387,89 +536,7 @@ docker-compose --version
 systemctl status docker
 ```
 
-### 🐳 Deploy Your Application
-
-Each instance is ready for Docker application deployment:
-
-```bash
-# SSH to instance
-ssh -i your-key.pem ec2-user@<instance-ip>
-
-# Navigate to application directory
-cd /opt/app
-
-# Create your Docker application files
-# - Dockerfile
-# - docker-compose.yml
-# - Your application code
-
-# Deploy your application
-docker-compose up -d
-
-# Monitor your application
-docker ps
-docker-compose logs
-```
-
-#### Deploy API to Instance A
-```bash
-# SSH to instance
-ssh -i your-key.pem ec2-user@<instance-a-ip>
-
-# Navigate to app directory
-cd /opt/app
-
-# Create docker-compose.yml
-cat > docker-compose.yml << EOF
-version: '3.8'
-services:
-  api:
-    image: your-account.dkr.ecr.us-east-1.amazonaws.com/ron-zbd-challenge-api:latest
-    ports:
-      - "8080:8080"
-    restart: unless-stopped
-EOF
-
-# Deploy
-docker-compose up -d
-```
-
-#### Deploy Prometheus to Instance B
-```bash
-# SSH to instance
-ssh -i your-key.pem ec2-user@<instance-b-ip>
-
-# Navigate to app directory
-cd /opt/app
-
-# Create Prometheus configuration
-cat > prometheus.yml << EOF
-global:
-  scrape_interval: 15s
-
-scrape_configs:
-  - job_name: 'api-server'
-    static_configs:
-      - targets: ['<instance-a-ip>:8080']
-    metrics_path: '/metrics'
-EOF
-
-# Create docker-compose.yml
-cat > docker-compose.yml << EOF
-version: '3.8'
-services:
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    restart: unless-stopped
-EOF
-
-# Deploy
-docker-compose up -d
-```
+---
 
 ## 🔄 CI/CD Pipeline
 
@@ -554,6 +621,8 @@ curl -f http://<instance-a-ip>:8080/metrics
    curl -f http://<instance-a-ip>:8080/metrics
    # Should fail with connection refused/timeout
    ```
+
+---
 
 ## 🏗️ Terraform Modules
 
