@@ -93,16 +93,19 @@ curl http://127.0.0.1:8080/hello
 
 Run on default port (8080):
 ```bash
+cd app
 npm start
 ```
 
 Run on custom port (3000):
 ```bash
+cd app
 PORT=3000 npm start
 ```
 
 Run on custom port (9090):
 ```bash
+cd app
 PORT=9090 npm start
 ```
 
@@ -123,6 +126,7 @@ PORT=9090 npm start
 
 2.  **Install dependencies:**
     ```bash
+    cd app
     npm install
     ```
 
@@ -137,9 +141,14 @@ The application will be running on `http://127.0.0.1:8080` by default.
 
 ```
 ron-zbd-challenge/
-├── src/
-│   └── index.ts          # Main application file
-├── terraform/            # Infrastructure as Code
+├── app/                 # Application code
+│   ├── src/
+│   │   └── index.ts     # Main application file
+│   ├── package.json     # Project dependencies and scripts
+│   ├── package-lock.json # Lock file for dependencies
+│   ├── tsconfig.json    # TypeScript configuration
+│   └── node_modules/    # Node.js dependencies
+├── terraform/           # Infrastructure as Code
 │   ├── modules/         # Reusable Terraform modules
 │   │   ├── vpc/         # VPC and networking
 │   │   └── ec2/         # Single EC2 instance
@@ -150,8 +159,6 @@ ron-zbd-challenge/
 │   ├── backend.tf       # S3 backend configuration
 │   └── test-security.sh # Security testing script
 ├── .github/workflows/   # CI/CD pipeline
-├── package.json         # Project dependencies and scripts
-├── tsconfig.json        # TypeScript configuration
 └── README.md           # This file
 ```
 
@@ -193,7 +200,13 @@ scrape_configs:
 
 ## 🧪 Testing
 
-Test all endpoints:
+First, make sure the application is running:
+```bash
+cd app
+npm start
+```
+
+Then test all endpoints:
 ```bash
 # Health check
 curl http://127.0.0.1:8080/health
