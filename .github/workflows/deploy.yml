@@ -1,0 +1,228 @@
+name: Deploy Infrastructure and API
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+  ECR_REPOSITORY: ron-zbd-challenge-api
+
+jobs:
+  # Job 1: Build and scan Docker image
+  build-and-scan:
+    runs-on: ubuntu-latest
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build, tag, and push image to Amazon ECR
+      id: build
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        # Create Dockerfile for the API
+        cat > Dockerfile << EOF
+        FROM node:18-alpine
+        WORKDIR /app
+        COPY package*.json ./
+        RUN npm ci --only=production
+        COPY src/ ./src/
+        EXPOSE 8080
+        USER node
+        CMD ["node", "src/index.js"]
+        EOF
+        
+        # Build the Docker image
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+        
+        # Push the image
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        
+        # Save digest for later use
+        echo "digest=$(docker inspect --format='{{index .RepoDigests 0}}' $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG | cut -d'@' -f2)" >> $GITHUB_OUTPUT
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: '${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  # Job 2: Create S3 bucket and DynamoDB table for Terraform backend
+  setup-backend:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Create S3 bucket for Terraform state
+      run: |
+        aws s3 mb s3://ron-zbd-challenge-terraform-state --region $AWS_REGION || echo "Bucket already exists"
+        aws s3api put-bucket-versioning --bucket ron-zbd-challenge-terraform-state --versioning-configuration Status=Enabled
+        aws s3api put-bucket-encryption --bucket ron-zbd-challenge-terraform-state --server-side-encryption-configuration '{
+          "Rules": [
+            {
+              "ApplyServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        }'
+
+    - name: Create DynamoDB table for Terraform locks
+      run: |
+        aws dynamodb create-table \
+          --table-name ron-zbd-challenge-terraform-locks \
+          --attribute-definitions AttributeName=LockID,AttributeType=S \
+          --key-schema AttributeName=LockID,KeyType=HASH \
+          --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 \
+          --region $AWS_REGION || echo "Table already exists"
+
+    - name: Create ECR repository
+      run: |
+        aws ecr create-repository \
+          --repository-name $ECR_REPOSITORY \
+          --region $AWS_REGION || echo "Repository already exists"
+
+  # Job 3: Deploy infrastructure with Terraform
+  deploy-infrastructure:
+    needs: [build-and-scan, setup-backend]
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.0
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Terraform Format Check
+      run: terraform fmt -check
+      working-directory: ./terraform
+
+    - name: Terraform Init
+      run: terraform init
+      working-directory: ./terraform
+
+    - name: Terraform Validate
+      run: terraform validate
+      working-directory: ./terraform
+
+    - name: Terraform Plan
+      run: terraform plan
+      working-directory: ./terraform
+
+    - name: Terraform Apply
+      if: github.ref == 'refs/heads/main'
+      run: terraform apply -auto-approve
+      working-directory: ./terraform
+
+  # Job 4: Deploy API to Instance A
+  deploy-api:
+    needs: [deploy-infrastructure]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Get Instance A IP
+      id: get-ip
+      run: |
+        cd terraform
+        INSTANCE_A_IP=$(terraform output -raw instance_a_public_ip)
+        echo "instance_ip=$INSTANCE_A_IP" >> $GITHUB_OUTPUT
+        echo "SSH key will be needed for deployment"
+
+    - name: Deploy API using SSM
+      run: |
+        # Get the instance ID
+        INSTANCE_A_ID=$(cd terraform && terraform output -raw instance_a_id)
+        
+        # Create deployment script
+        cat > deploy-api.sh << EOF
+        #!/bin/bash
+        cd /opt/app
+        
+        # Login to ECR
+        aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+        
+        # Create docker-compose.yml
+        cat > docker-compose.yml << 'COMPOSE_EOF'
+        version: '3.8'
+        services:
+          api:
+            image: $ECR_REGISTRY/$ECR_REPOSITORY:latest
+            ports:
+              - "8080:8080"
+            restart: unless-stopped
+            logging:
+              driver: "json-file"
+              options:
+                max-size: "10m"
+                max-file: "3"
+        COMPOSE_EOF
+        
+        # Deploy the API
+        docker-compose down
+        docker-compose pull
+        docker-compose up -d
+        
+        # Verify deployment
+        sleep 10
+        curl -f http://localhost:8080/health || exit 1
+        echo "API deployed successfully"
+        EOF
+        
+        # Send command to instance via SSM
+        aws ssm send-command \
+          --instance-ids $INSTANCE_A_ID \
+          --document-name "AWS-RunShellScript" \
+          --parameters 'commands=["bash /tmp/deploy-api.sh"]' \
+          --region $AWS_REGION
+        
+        # Wait for command to complete
+        sleep 30

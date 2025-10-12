@@ -1,0 +1,86 @@
+# Terraform Modules
+
+This directory contains reusable Terraform modules for the Ron ZBD Challenge infrastructure.
+
+## Modules
+
+### VPC Module (`vpc/`)
+
+Creates the networking foundation:
+- VPC with DNS support
+- Internet Gateway
+- Public subnet
+- Route table and associations
+
+**Usage:**
+```hcl
+module "vpc" {
+  source = "./modules/vpc"
+  
+  project_name         = "my-project"
+  environment          = "prod"
+  vpc_cidr            = "10.0.0.0/16"
+  public_subnet_cidr  = "10.0.1.0/24"
+  availability_zone   = "us-east-1a"
+}
+```
+
+### EC2 Module (`ec2/`)
+
+Creates a single secure EC2 instance with:
+- 1 EC2 instance (configurable name)
+- Security groups with appropriate rules
+- IAM roles and policies for CloudWatch
+- CloudWatch log group
+- Generic infrastructure setup (Docker, security hardening)
+
+**Usage:**
+```hcl
+module "instance_a" {
+  source = "./modules/ec2"
+  
+  project_name               = "my-project"
+  environment                = "prod"
+  vpc_id                    = module.vpc.vpc_id
+  subnet_id                 = module.vpc.public_subnet_id
+  ami_id                    = "ami-12345678"
+  instance_name             = "instance-a"
+  instance_type             = "t3.micro"
+  allowed_ssh_cidrs         = ["10.0.0.0/8"]
+  cloudwatch_log_group_name = "/aws/ec2/my-project"
+}
+
+# Create multiple instances by instantiating multiple times
+module "instance_b" {
+  source = "./modules/ec2"
+  
+  project_name               = "my-project"
+  environment                = "prod"
+  vpc_id                    = module.vpc.vpc_id
+  subnet_id                 = module.vpc.public_subnet_id
+  ami_id                    = "ami-12345678"
+  instance_name             = "instance-b"
+  instance_type             = "t3.micro"
+  allowed_ssh_cidrs         = ["10.0.0.0/8"]
+  cloudwatch_log_group_name = "/aws/ec2/my-project"
+}
+```
+
+## Module Structure
+
+Each module follows the standard Terraform module structure:
+
+```
+module-name/
+├── main.tf      # Main resource definitions
+├── variables.tf # Input variables
+├── outputs.tf   # Output values
+└── README.md    # Module documentation (optional)
+```
+
+## Benefits
+
+- **Reusability**: Use modules across different environments
+- **Maintainability**: Update modules independently
+- **Testing**: Test modules in isolation
+- **Documentation**: Clear interfaces with variables and outputs
