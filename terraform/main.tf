@@ -2,7 +2,7 @@
 locals {
   project_name              = "ron-zbd-challenge"
   environment               = "dev"
-  allowed_ssh_cidrs         = ["0.0.0.0/0"]  # WARNING: Replace with your IP!
+  allowed_ssh_cidrs         = ["129.224.209.181/0"]  # WARNING: Replace with your IP!
   cloudwatch_log_group_name = "/aws/ec2/ron-zbd-challenge"
 }
 
